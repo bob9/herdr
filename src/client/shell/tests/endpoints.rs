@@ -284,7 +284,8 @@ fn switching_machines_preserves_aggregate_agent_scroll_and_visible_rows() {
         state.tab_scroll = 2;
         assert!(state.activate_endpoint_projection(&endpoint_id));
         assert_eq!(state.agent_scroll, 6);
-        assert_eq!(state.workspace_scroll, 0);
+        // The machines list spans every endpoint; only the per-endpoint tab bar resets.
+        assert_eq!(state.workspace_scroll, 3);
         assert_eq!(state.tab_scroll, 0);
         assert!(state.pane_surface.is_none());
 
@@ -2551,4 +2552,83 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
             target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
+}
+
+fn state_with_scrollable_workspaces() -> (ClientShellState, ClientEndpointId) {
+    let (mut state, remote) = state_with_remote();
+    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
+        let mut projection = state
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap()
+            .snapshot
+            .clone()
+            .unwrap();
+        let template = projection.workspaces[0].clone();
+        projection.workspaces = (0..10usize)
+            .map(|index| ClientShellWorkspace {
+                workspace_id: format!("ws_{}", index + 1),
+                number: index + 1,
+                label: format!("workspace {index}"),
+                focused: index == 0,
+                ..template.clone()
+            })
+            .collect();
+        state.set_endpoint_snapshot(&endpoint_id, projection);
+    }
+    state.compose(100, 24).unwrap();
+    (state, remote)
+}
+
+#[test]
+fn selecting_a_session_on_another_machine_keeps_the_machines_list_scroll() {
+    let (mut state, remote) = state_with_scrollable_workspaces();
+    assert!(state.hits.workspace_max_scroll > 0, "list must scroll");
+    state.workspace_scroll = state.hits.workspace_max_scroll;
+    state.compose(100, 24).unwrap();
+    let scroll = state.workspace_scroll;
+    assert!(scroll > 0);
+
+    let (rect, workspace_id) = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote)
+        .map(|hit| (hit.rect, hit.workspace_id.clone()))
+        .expect("a remote session row is visible");
+    let click = state.handle_raw_events(vec![
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        }),
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        }),
+    ]);
+    assert!(matches!(
+        click.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Workspace(target_workspace)),
+        }] if endpoint_id == &remote && target_workspace == &workspace_id
+    ));
+
+    assert!(state.activate_endpoint_projection(&remote));
+    assert_eq!(state.workspace_scroll, scroll);
+    let mut next_surface = surface();
+    next_surface.boot_id = state.endpoint_boot_id(&remote).unwrap().into();
+    state.set_pane_surface(next_surface);
+    state.compose(100, 24).unwrap();
+    assert_eq!(state.workspace_scroll, scroll);
+    assert!(state
+        .hits
+        .workspaces
+        .iter()
+        .any(|visible| visible.endpoint_id == remote && visible.workspace_id == workspace_id));
 }

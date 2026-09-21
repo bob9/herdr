@@ -221,6 +221,8 @@ impl ClientShellState {
         let generation = endpoint.snapshot_generation;
         let switching_endpoint = endpoint_id != &self.active_endpoint_id;
         let agent_scroll = self.agent_scroll;
+        let aggregate_workspace_list = self.multi_endpoint_active();
+        let workspace_scroll = self.workspace_scroll;
         if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
@@ -230,6 +232,14 @@ impl ClientShellState {
         if switching_endpoint {
             // The aggregate agent list belongs to the client, not one endpoint.
             self.agent_scroll = agent_scroll;
+            if aggregate_workspace_list {
+                // The machines list spans every endpoint, so selecting a session on
+                // another machine must not scroll it back to the top or jump to the
+                // session that machine happened to focus last. A later focus change
+                // still reveals its workspace.
+                self.workspace_scroll = workspace_scroll;
+                self.reveal_focused_workspace = false;
+            }
         }
         if let Some((_, pane_id)) = pending_agent_reveal {
             self.reveal_endpoint_agent(endpoint_id, &pane_id, agent_body_height);
